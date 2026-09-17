@@ -1,0 +1,2 @@
+Best_CV_F1,classifier__n_estimators,classifier__min_samples_split,classifier__min_samples_leaf,classifier__max_features,classifier__max_depth,classifier__class_weight
+0.6787623571265664,200,5,2,,12,balanced

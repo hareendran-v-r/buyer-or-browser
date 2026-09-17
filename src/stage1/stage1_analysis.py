@@ -14,8 +14,9 @@ import matplotlib.pyplot as plt
 # 1. PATHS
 # ============================================================
 
-DATA_DIR = Path("data")
-FIGURE_DIR = Path("figures")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_ROOT / "data"
+FIGURE_DIR = PROJECT_ROOT / "figures"
 
 FIGURE_DIR.mkdir(exist_ok=True)
 
