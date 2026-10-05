@@ -12,18 +12,36 @@ from sklearn.model_selection import StratifiedKFold, cross_validate
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stage2_utils import (  # noqa: E402
     OUTPUT_DIR, RANDOM_STATE, load_data, make_forest_pipeline,
-    make_logistic_pipeline,
+    make_hist_gradient_boosting_pipeline, make_logistic_pipeline,
 )
 
 X, y = load_data()
 models = {
     "Logistic Regression": make_logistic_pipeline(X.columns),
     "Random Forest": make_forest_pipeline(X.columns),
+    "HistGradientBoosting": make_hist_gradient_boosting_pipeline(X.columns),
 }
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    print("XGBoost not installed - skipping optional XGBoost experiment.")
+else:
+    from sklearn.pipeline import Pipeline
+    from stage2_utils import make_preprocessor
+
+    models["XGBoost"] = Pipeline(steps=[
+        ("preprocessor", make_preprocessor(X.columns)),
+        ("classifier", XGBClassifier(
+            n_estimators=300, learning_rate=0.05, max_depth=5,
+            subsample=0.8, colsample_bytree=0.8, eval_metric="logloss",
+            random_state=RANDOM_STATE, n_jobs=-1,
+        )),
+    ])
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 scoring = {
     "Accuracy": "accuracy", "Precision": "precision", "Recall": "recall",
     "F1": "f1", "ROC_AUC": "roc_auc",
+    "PR_AUC": "average_precision",
 }
 fold_rows = []
 summary_rows = []
@@ -45,6 +63,7 @@ folds = pd.DataFrame(fold_rows)
 summary = pd.DataFrame(summary_rows)
 folds.to_csv(OUTPUT_DIR / "03_cross_validation_folds.csv", index=False)
 summary.to_csv(OUTPUT_DIR / "03_cross_validation_summary.csv", index=False)
+summary.to_csv(OUTPUT_DIR / "cross_validation_comparison.csv", index=False)
 print("\nSTRATIFIED CROSS-VALIDATION SUMMARY")
 print(summary.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
 

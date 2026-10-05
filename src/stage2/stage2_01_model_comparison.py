@@ -12,7 +12,7 @@ from sklearn.metrics import ConfusionMatrixDisplay
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stage2_utils import (  # noqa: E402
     OUTPUT_DIR, evaluate_model, load_data, make_forest_pipeline,
-    make_logistic_pipeline, split_data,
+    make_hist_gradient_boosting_pipeline, make_logistic_pipeline, split_data,
 )
 
 X, y = load_data()
@@ -20,7 +20,25 @@ X_train, X_test, y_train, y_test = split_data(X, y)
 models = {
     "Logistic Regression": make_logistic_pipeline(X.columns),
     "Random Forest": make_forest_pipeline(X.columns),
+    "HistGradientBoosting": make_hist_gradient_boosting_pipeline(X.columns),
 }
+
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    print("XGBoost not installed - skipping optional XGBoost experiment.")
+else:
+    from sklearn.pipeline import Pipeline
+    from stage2_utils import make_preprocessor
+
+    models["XGBoost"] = Pipeline(steps=[
+        ("preprocessor", make_preprocessor(X.columns)),
+        ("classifier", XGBClassifier(
+            n_estimators=300, learning_rate=0.05, max_depth=5,
+            subsample=0.8, colsample_bytree=0.8, eval_metric="logloss",
+            random_state=42, n_jobs=-1,
+        )),
+    ])
 rows = []
 for name, model in models.items():
     model.fit(X_train, y_train)
