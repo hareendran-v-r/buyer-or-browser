@@ -4,12 +4,15 @@ from pathlib import Path
 
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
     confusion_matrix,
     f1_score,
+    fbeta_score,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -50,7 +53,7 @@ def split_data(X, y):
     )
 
 
-def make_preprocessor(columns):
+def make_preprocessor(columns, dense=False):
     categorical = [name for name in CATEGORICAL_FEATURES if name in columns]
     numerical = [name for name in columns if name not in categorical]
     return ColumnTransformer(
@@ -58,7 +61,7 @@ def make_preprocessor(columns):
             ("numerical", StandardScaler(), numerical),
             (
                 "categorical",
-                OneHotEncoder(handle_unknown="ignore"),
+                OneHotEncoder(handle_unknown="ignore", sparse_output=not dense),
                 categorical,
             ),
         ]
@@ -98,15 +101,35 @@ def make_forest_pipeline(columns, class_weight=None, n_estimators=500):
     )
 
 
+def make_hist_gradient_boosting_pipeline(columns, class_weight=None, **parameters):
+    """Build a dense pipeline compatible with HistGradientBoostingClassifier."""
+    defaults = {
+        "learning_rate": 0.1,
+        "max_iter": 200,
+        "random_state": RANDOM_STATE,
+        "class_weight": class_weight,
+    }
+    defaults.update(parameters)
+    return Pipeline(
+        steps=[
+            ("preprocessor", make_preprocessor(columns, dense=True)),
+            ("classifier", HistGradientBoostingClassifier(**defaults)),
+        ]
+    )
+
+
 def evaluate_predictions(y_true, predictions, probabilities):
     """Return common Purchase-class metrics and confusion counts."""
     tn, fp, fn, tp = confusion_matrix(y_true, predictions).ravel()
     return {
         "Accuracy": accuracy_score(y_true, predictions),
+        "Balanced_Accuracy": balanced_accuracy_score(y_true, predictions),
         "Precision": precision_score(y_true, predictions, zero_division=0),
         "Recall": recall_score(y_true, predictions, zero_division=0),
         "F1": f1_score(y_true, predictions, zero_division=0),
+        "F2": fbeta_score(y_true, predictions, beta=2, zero_division=0),
         "ROC_AUC": roc_auc_score(y_true, probabilities),
+        "PR_AUC": average_precision_score(y_true, probabilities),
         "TN": tn,
         "FP": fp,
         "FN": fn,
