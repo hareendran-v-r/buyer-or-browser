@@ -1,0 +1,6 @@
+Dataset,Samples,No Purchase,Purchase,Purchase Rate (%)
+Original cleaned dataset,12205,10297,1908,15.632937320770177
+Training before balancing,8543,7207,1336,15.638534472667681
+Training after balancing,2672,1336,1336,50.0
+Validation,1831,1545,286,15.6198798470781
+Test,1831,1545,286,15.6198798470781

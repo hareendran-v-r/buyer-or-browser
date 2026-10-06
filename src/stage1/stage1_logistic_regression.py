@@ -1,21 +1,27 @@
 """
-Stage 1 - Buyer or Browser?
+Stage 1 - Online Shopper: Buyer or Window Shopper?
 Predicting Online Purchase Intention using Logistic Regression
 
 Target:
     Revenue
-        False = No Purchase
-        True  = Purchase
+        0 = No Purchase
+        1 = Purchase
 
-Method:
+Preprocessing:
+    1. Check/remove exact duplicates
+    2. Separate numerical and categorical features
+    3. Stratified train/validation/test split
+    4. Random undersampling of TRAINING SET ONLY
+    5. Standardise numerical variables
+    6. One-hot encode categorical variables
+
+Model:
     Logistic Regression
-
-Dataset:
-    Online Shoppers Purchasing Intention Dataset
 """
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -42,10 +48,26 @@ from sklearn.metrics import (
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_FILE = PROJECT_ROOT / "data" / "online_shoppers_intention.csv"
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "stage1"
+
+DATA_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "online_shoppers_intention.csv"
+)
+
+OUTPUT_DIR = (
+    PROJECT_ROOT
+    / "outputs"
+    / "stage1"
+)
+
+FIGURE_DIR = (
+    PROJECT_ROOT
+    / "figures"
+)
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FIGURE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
@@ -54,52 +76,70 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 df = pd.read_csv(DATA_FILE)
 
-print("=" * 60)
+print("=" * 70)
 print("RAW DATASET")
-print("=" * 60)
+print("=" * 70)
 
-print(f"Rows: {len(df):,}")
-print(f"Columns: {df.shape[1]}")
-print(f"Missing values: {df.isnull().sum().sum()}")
-print(f"Duplicate rows: {df.duplicated().sum()}")
+print(f"Rows:             {len(df):,}")
+print(f"Columns:          {df.shape[1]}")
+print(f"Missing values:   {df.isna().sum().sum():,}")
+print(f"Duplicate rows:   {df.duplicated().sum():,}")
 
 
 # ============================================================
-# 3. REMOVE EXACT DUPLICATES
+# 3. DATA QUALITY CHECKS
 # ============================================================
 
-rows_before = len(df)
+# ----------------------------
+# Missing values
+# ----------------------------
 
-df = df.drop_duplicates().reset_index(drop=True)
+missing_values = df.isna().sum()
 
-rows_after = len(df)
+if missing_values.sum() == 0:
+    print("\nNo missing values found.")
+else:
+    print("\nMissing values:")
+    print(missing_values[missing_values > 0])
 
-print("\n" + "=" * 60)
-print("DATA CLEANING")
-print("=" * 60)
+    # We deliberately stop instead of silently imputing values.
+    # An imputation strategy should be justified if missing
+    # values are found.
+    raise ValueError(
+        "Missing values were found. "
+        "Choose and document an imputation strategy."
+    )
 
-print(f"Rows before duplicate removal: {rows_before:,}")
-print(f"Rows after duplicate removal:  {rows_after:,}")
-print(f"Duplicates removed:            {rows_before - rows_after:,}")
-print(f"Remaining duplicates:          {df.duplicated().sum()}")
+
+# ----------------------------
+# Exact duplicate rows
+# ----------------------------
+
+duplicate_count = df.duplicated().sum()
+
+print(f"\nExact duplicate rows found: {duplicate_count:,}")
+
+if duplicate_count > 0:
+    df = df.drop_duplicates().reset_index(drop=True)
+
+print(f"Rows after duplicate handling: {len(df):,}")
 
 
 # ============================================================
 # 4. DEFINE TARGET
 # ============================================================
 
-# Revenue is Boolean in the original dataset.
-# False = session did not result in purchase
-# True  = session resulted in purchase
+# Revenue is Boolean in the original dataset:
+#
+# False -> 0 -> No Purchase
+# True  -> 1 -> Purchase
 
 y = df["Revenue"].astype(int)
 
 
 # ============================================================
-# 5. DEFINE INPUT FEATURES
+# 5. DEFINE FEATURES
 # ============================================================
-
-# Numerical browsing/session features
 
 numerical_features = [
     "Administrative",
@@ -115,8 +155,6 @@ numerical_features = [
 ]
 
 
-# Categorical session features
-
 categorical_features = [
     "Month",
     "OperatingSystems",
@@ -128,93 +166,343 @@ categorical_features = [
 ]
 
 
-# Combine all features
-
 features = numerical_features + categorical_features
 
 X = df[features].copy()
 
 
 # ============================================================
-# 6. VERIFY FEATURES
+# 6. PREPARE CATEGORICAL VARIABLES
 # ============================================================
 
-print("\n" + "=" * 60)
-print("FEATURES USED BY MODEL")
-print("=" * 60)
-
-print(f"Number of input features: {X.shape[1]}")
-
-for feature in X.columns:
-    print(f" - {feature}")
-
-print()
-print(f"PageValues included: {'PageValues' in X.columns}")
-
-if "PageValues" not in X.columns:
-    raise ValueError(
-        "PageValues is NOT included in the model. "
-        "Check the feature definitions."
-    )
-
-
-# ============================================================
-# 7. PREPARE CATEGORICAL FEATURES
-# ============================================================
-
-# Some variables such as Browser and Region are represented
-# numerically in the dataset but actually represent categories.
-# Convert all categorical variables to strings before encoding.
+# Some categorical variables are stored as numbers in the raw
+# dataset. These numbers are identifiers, not quantities.
+#
+# Example:
+# Browser = 3 does NOT mean "three times Browser = 1".
+#
+# Convert them to strings so that they are explicitly treated
+# as categories by OneHotEncoder.
 
 for column in categorical_features:
     X[column] = X[column].astype(str)
 
 
 # ============================================================
-# 8. TRAIN / TEST SPLIT
+# 7. ORIGINAL CLASS DISTRIBUTION
 # ============================================================
 
-# Stratification preserves approximately the same purchase rate
-# in both the training and testing datasets.
+print("\n" + "=" * 70)
+print("ORIGINAL CLASS DISTRIBUTION")
+print("=" * 70)
 
-X_train, X_test, y_train, y_test = train_test_split(
+original_distribution = (
+    y.value_counts()
+    .sort_index()
+)
+
+original_percentages = (
+    y.value_counts(normalize=True)
+    .sort_index()
+    .mul(100)
+)
+
+for class_value, class_name in [
+    (0, "No Purchase"),
+    (1, "Purchase"),
+]:
+    print(
+        f"{class_name:12s}: "
+        f"{original_distribution[class_value]:5,d} "
+        f"({original_percentages[class_value]:.2f}%)"
+    )
+
+
+# ============================================================
+# 8. TRAIN / VALIDATION / TEST SPLIT
+# ============================================================
+
+# Desired final proportions:
+#
+# Training:   70%
+# Validation: 15%
+# Test:       15%
+#
+# IMPORTANT:
+# Splitting occurs BEFORE balancing.
+#
+# Validation and test therefore retain the natural class
+# distribution of the original dataset.
+
+
+# First split:
+# 70% training, 30% temporary
+
+X_train, X_temp, y_train, y_temp = train_test_split(
     X,
     y,
-    test_size=0.20,
+    test_size=0.30,
     random_state=42,
     stratify=y,
 )
 
 
-print("\n" + "=" * 60)
-print("TRAIN / TEST SPLIT")
-print("=" * 60)
+# Second split:
+# divide temporary data equally into validation and test.
+#
+# 30% / 2 = 15% validation + 15% test
 
-print(f"Training observations: {len(X_train):,}")
-print(f"Testing observations:  {len(X_test):,}")
+X_validation, X_test, y_validation, y_test = (
+    train_test_split(
+        X_temp,
+        y_temp,
+        test_size=0.50,
+        random_state=42,
+        stratify=y_temp,
+    )
+)
+
+
+print("\n" + "=" * 70)
+print("TRAIN / VALIDATION / TEST SPLIT")
+print("=" * 70)
 
 print(
-    f"Training purchase rate: "
-    f"{y_train.mean() * 100:.2f}%"
+    f"Training:   {len(X_train):5,d} "
+    f"({len(X_train) / len(X) * 100:.2f}%)"
 )
 
 print(
-    f"Testing purchase rate:  "
-    f"{y_test.mean() * 100:.2f}%"
+    f"Validation: {len(X_validation):5,d} "
+    f"({len(X_validation) / len(X) * 100:.2f}%)"
+)
+
+print(
+    f"Test:       {len(X_test):5,d} "
+    f"({len(X_test) / len(X) * 100:.2f}%)"
+)
+
+
+print("\nPurchase rate before balancing:")
+
+print(
+    f"Training:   {y_train.mean() * 100:.2f}%"
+)
+
+print(
+    f"Validation: {y_validation.mean() * 100:.2f}%"
+)
+
+print(
+    f"Test:       {y_test.mean() * 100:.2f}%"
 )
 
 
 # ============================================================
-# 9. PREPROCESSING
+# 9. BALANCE THE TRAINING DATA
 # ============================================================
 
-# Numerical variables are standardized because Logistic
-# Regression can be affected by differences in feature scale.
+# We balance ONLY the training set.
 #
-# Categorical variables are converted using one-hot encoding.
+# Random undersampling is used:
 #
-# handle_unknown="ignore" ensures that a category appearing
-# only in the test set does not cause an error.
+#     Purchase samples      -> keep all
+#     No-Purchase samples   -> randomly sample the same number
+#
+# This produces a 50/50 training dataset.
+#
+# Validation and test sets remain untouched.
+
+
+training_data = X_train.copy()
+
+training_data["Revenue"] = y_train
+
+
+purchase_training = training_data[
+    training_data["Revenue"] == 1
+]
+
+no_purchase_training = training_data[
+    training_data["Revenue"] == 0
+]
+
+
+n_purchase = len(purchase_training)
+
+
+# Randomly sample the majority class so that it contains
+# exactly the same number of observations as the minority class.
+
+no_purchase_sampled = no_purchase_training.sample(
+    n=n_purchase,
+    random_state=42,
+    replace=False,
+)
+
+
+# Combine minority class and sampled majority class.
+
+balanced_training = pd.concat(
+    [
+        purchase_training,
+        no_purchase_sampled,
+    ],
+    axis=0,
+)
+
+
+# Shuffle the balanced dataset.
+
+balanced_training = balanced_training.sample(
+    frac=1,
+    random_state=42,
+).reset_index(drop=True)
+
+
+# Separate features and target again.
+
+y_train_balanced = balanced_training[
+    "Revenue"
+].astype(int)
+
+X_train_balanced = balanced_training.drop(
+    columns="Revenue"
+)
+
+
+print("\n" + "=" * 70)
+print("TRAINING DATA BALANCING")
+print("=" * 70)
+
+print("Before balancing:")
+
+print(
+    y_train.value_counts()
+    .sort_index()
+    .rename(
+        index={
+            0: "No Purchase",
+            1: "Purchase",
+        }
+    )
+)
+
+
+print("\nAfter balancing:")
+
+print(
+    y_train_balanced.value_counts()
+    .sort_index()
+    .rename(
+        index={
+            0: "No Purchase",
+            1: "Purchase",
+        }
+    )
+)
+
+
+print(
+    "\nBalanced training observations: "
+    f"{len(X_train_balanced):,}"
+)
+
+print(
+    "Balanced training purchase rate: "
+    f"{y_train_balanced.mean() * 100:.2f}%"
+)
+
+
+# ============================================================
+# 10. PLOT CLASS DISTRIBUTION BEFORE / AFTER BALANCING
+# ============================================================
+
+before_counts = (
+    y_train.value_counts()
+    .sort_index()
+)
+
+after_counts = (
+    y_train_balanced.value_counts()
+    .sort_index()
+)
+
+
+class_distribution = pd.DataFrame(
+    {
+        "Before balancing": [
+            before_counts.get(0, 0),
+            before_counts.get(1, 0),
+        ],
+        "After balancing": [
+            after_counts.get(0, 0),
+            after_counts.get(1, 0),
+        ],
+    },
+    index=[
+        "No Purchase",
+        "Purchase",
+    ],
+)
+
+
+ax = class_distribution.plot(
+    kind="bar",
+    figsize=(7, 5),
+)
+
+ax.set_title(
+    "Training Class Distribution Before and After Balancing"
+)
+
+ax.set_xlabel("Class")
+ax.set_ylabel("Number of training sessions")
+
+plt.xticks(rotation=0)
+
+plt.tight_layout()
+
+balancing_figure = (
+    FIGURE_DIR
+    / "training_class_balance.png"
+)
+
+plt.savefig(
+    balancing_figure,
+    dpi=300,
+    bbox_inches="tight",
+)
+
+plt.show()
+
+
+# ============================================================
+# 11. PREPROCESSING PIPELINE
+# ============================================================
+
+# NUMERICAL FEATURES
+#
+# StandardScaler:
+#
+#       z = (x - training mean) / training standard deviation
+#
+# This puts numerical features on comparable scales.
+#
+#
+# CATEGORICAL FEATURES
+#
+# OneHotEncoder:
+#
+# Month=Nov becomes something conceptually like:
+#
+# Month_Nov = 1
+# Month_Oct = 0
+# ...
+#
+# This prevents arbitrary category identifiers from being
+# interpreted as continuous numerical values.
+
 
 preprocessor = ColumnTransformer(
     transformers=[
@@ -230,17 +518,14 @@ preprocessor = ColumnTransformer(
             ),
             categorical_features,
         ),
-    ]
+    ],
+    remainder="drop",
 )
 
 
 # ============================================================
-# 10. LOGISTIC REGRESSION MODEL
+# 12. LOGISTIC REGRESSION
 # ============================================================
-
-# Standard Logistic Regression is used for Stage 1.
-# We intentionally do not use class_weight="balanced" here.
-# Class imbalance can be investigated further in Stage 2.
 
 classifier = LogisticRegression(
     max_iter=2000,
@@ -250,233 +535,188 @@ classifier = LogisticRegression(
 
 model = Pipeline(
     steps=[
-        ("preprocessor", preprocessor),
-        ("classifier", classifier),
+        (
+            "preprocessor",
+            preprocessor,
+        ),
+        (
+            "classifier",
+            classifier,
+        ),
     ]
 )
 
 
 # ============================================================
-# 11. TRAIN MODEL
+# 13. TRAIN MODEL
 # ============================================================
 
-print("\nTraining Logistic Regression...")
+print("\n" + "=" * 70)
+print("TRAINING LOGISTIC REGRESSION")
+print("=" * 70)
 
-model.fit(X_train, y_train)
+model.fit(
+    X_train_balanced,
+    y_train_balanced,
+)
 
 print("Training complete.")
 
 
 # ============================================================
-# 12. MAKE PREDICTIONS
+# 14. EVALUATION FUNCTION
 # ============================================================
 
-# Binary class predictions
+def evaluate_model(
+    model,
+    X_data,
+    y_data,
+    dataset_name,
+):
+    """
+    Evaluate the fitted model and return performance metrics.
+    """
 
-y_pred = model.predict(X_test)
+    predictions = model.predict(X_data)
 
+    probabilities = model.predict_proba(
+        X_data
+    )[:, 1]
 
-# Predicted probability that the session results in purchase
-
-y_probability = model.predict_proba(X_test)[:, 1]
-
-
-# ============================================================
-# 13. CALCULATE PERFORMANCE METRICS
-# ============================================================
-
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred)
-recall = recall_score(y_test, y_pred)
-f1 = f1_score(y_test, y_pred)
-roc_auc = roc_auc_score(y_test, y_probability)
-
-
-print("\n" + "=" * 60)
-print("LOGISTIC REGRESSION RESULTS")
-print("=" * 60)
-
-print(f"Accuracy:  {accuracy:.4f}")
-print(f"Precision: {precision:.4f}")
-print(f"Recall:    {recall:.4f}")
-print(f"F1-score:  {f1:.4f}")
-print(f"ROC-AUC:   {roc_auc:.4f}")
-
-
-# ============================================================
-# 14. CLASSIFICATION REPORT
-# ============================================================
-
-print("\nClassification report:")
-
-print(
-    classification_report(
-        y_test,
-        y_pred,
-        target_names=[
-            "No Purchase",
-            "Purchase",
-        ],
-        digits=4,
+    accuracy = accuracy_score(
+        y_data,
+        predictions,
     )
-)
 
+    error_rate = 1 - accuracy
 
-# ============================================================
-# 15. CONFUSION MATRIX VALUES
-# ============================================================
+    precision = precision_score(
+        y_data,
+        predictions,
+        zero_division=0,
+    )
 
-cm = confusion_matrix(y_test, y_pred)
+    recall = recall_score(
+        y_data,
+        predictions,
+        zero_division=0,
+    )
 
-tn, fp, fn, tp = cm.ravel()
+    f1 = f1_score(
+        y_data,
+        predictions,
+        zero_division=0,
+    )
 
-print("=" * 60)
-print("CONFUSION MATRIX")
-print("=" * 60)
+    roc_auc = roc_auc_score(
+        y_data,
+        probabilities,
+    )
 
-print(f"True Negatives:  {tn}")
-print(f"False Positives: {fp}")
-print(f"False Negatives: {fn}")
-print(f"True Positives:  {tp}")
+    print("\n" + "=" * 70)
+    print(dataset_name.upper())
+    print("=" * 70)
 
+    print(f"Samples:    {len(y_data):,}")
+    print(f"Accuracy:   {accuracy:.4f}")
+    print(f"Error rate: {error_rate:.4f}")
+    print(f"Precision:  {precision:.4f}")
+    print(f"Recall:     {recall:.4f}")
+    print(f"F1-score:   {f1:.4f}")
+    print(f"ROC-AUC:    {roc_auc:.4f}")
 
-# ============================================================
-# 16. MAJORITY-CLASS BASELINE
-# ============================================================
+    print("\nClassification report:")
 
-# Because most sessions do not end in purchase, accuracy alone
-# can be misleading. Compare the model against a classifier
-# that predicts "No Purchase" for every session.
+    print(
+        classification_report(
+            y_data,
+            predictions,
+            target_names=[
+                "No Purchase",
+                "Purchase",
+            ],
+            digits=4,
+            zero_division=0,
+        )
+    )
 
-majority_baseline_accuracy = (y_test == 0).mean()
-
-
-print("\n" + "=" * 60)
-print("MAJORITY-CLASS BASELINE")
-print("=" * 60)
-
-print(
-    "Always predicting 'No Purchase' accuracy: "
-    f"{majority_baseline_accuracy:.4f}"
-)
-
-print(
-    "Logistic Regression accuracy:             "
-    f"{accuracy:.4f}"
-)
-
-print(
-    "Improvement over baseline:                 "
-    f"{accuracy - majority_baseline_accuracy:+.4f}"
-)
-
-
-# ============================================================
-# 17. EXAMPLE PREDICTIONS
-# ============================================================
-
-example_predictions = pd.DataFrame(
-    {
-        "Actual": y_test.iloc[:10].map(
-            {
-                0: "No Purchase",
-                1: "Purchase",
-            }
-        ),
-        "Predicted": pd.Series(
-            y_pred[:10],
-            index=y_test.index[:10],
-        ).map(
-            {
-                0: "No Purchase",
-                1: "Purchase",
-            }
-        ),
-        "PurchaseProbability": y_probability[:10],
+    return {
+        "Dataset": dataset_name,
+        "Samples": len(y_data),
+        "Accuracy": accuracy,
+        "Error Rate": error_rate,
+        "Precision": precision,
+        "Recall": recall,
+        "F1-score": f1,
+        "ROC-AUC": roc_auc,
     }
-)
-
-example_predictions["PurchaseProbability"] = (
-    example_predictions["PurchaseProbability"].round(3)
-)
-
-
-print("\n" + "=" * 60)
-print("EXAMPLE PREDICTIONS")
-print("=" * 60)
-
-print(example_predictions.to_string(index=False))
 
 
 # ============================================================
-# 18. CONFUSION MATRIX FIGURE
+# 15. TRAINING EVALUATION
 # ============================================================
 
-display = ConfusionMatrixDisplay(
-    confusion_matrix=cm,
-    display_labels=[
-        "No Purchase",
-        "Purchase",
-    ],
+# Evaluate using the balanced training data on which the model
+# was actually fitted.
+
+training_results = evaluate_model(
+    model,
+    X_train_balanced,
+    y_train_balanced,
+    "Balanced Training",
 )
-
-display.plot(
-    values_format="d"
-)
-
-plt.title(
-    "Logistic Regression Confusion Matrix"
-)
-
-plt.tight_layout()
-
-confusion_matrix_file = (
-    OUTPUT_DIR /
-    "logistic_regression_confusion_matrix.png"
-)
-
-plt.savefig(
-    confusion_matrix_file,
-    dpi=300,
-    bbox_inches="tight",
-)
-
-print(
-    f"\nConfusion matrix saved to: "
-    f"{confusion_matrix_file}"
-)
-
-plt.show()
 
 
 # ============================================================
-# 19. SAVE MODEL RESULTS
+# 16. VALIDATION EVALUATION
+# ============================================================
+
+# Validation remains naturally imbalanced.
+
+validation_results = evaluate_model(
+    model,
+    X_validation,
+    y_validation,
+    "Validation",
+)
+
+
+# ============================================================
+# 17. TEST EVALUATION
+# ============================================================
+
+# IMPORTANT:
+#
+# In a strict experimental workflow, test-set evaluation should
+# be performed only after model-development decisions have been
+# completed using the validation set.
+#
+# For the final Stage 1 script we calculate it here so that the
+# final submitted model can be evaluated.
+
+test_results = evaluate_model(
+    model,
+    X_test,
+    y_test,
+    "Test",
+)
+
+
+# ============================================================
+# 18. SAVE METRICS
 # ============================================================
 
 results = pd.DataFrame(
-    {
-        "Metric": [
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1-score",
-            "ROC-AUC",
-            "Majority baseline accuracy",
-        ],
-        "Value": [
-            accuracy,
-            precision,
-            recall,
-            f1,
-            roc_auc,
-            majority_baseline_accuracy,
-        ],
-    }
+    [
+        training_results,
+        validation_results,
+        test_results,
+    ]
 )
 
 results_file = (
-    OUTPUT_DIR /
-    "stage1_logistic_regression_results.csv"
+    OUTPUT_DIR
+    / "logistic_regression_metrics.csv"
 )
 
 results.to_csv(
@@ -484,17 +724,235 @@ results.to_csv(
     index=False,
 )
 
-
 print(
-    f"Results saved to: "
-    f"{results_file}"
+    f"\nMetrics saved to: {results_file}"
 )
 
 
 # ============================================================
-# 20. FINISHED
+# 19. PERFORMANCE COMPARISON PLOT
 # ============================================================
 
-print("\n" + "=" * 60)
-print("STAGE 1 MODEL COMPLETE")
-print("=" * 60)
+plot_metrics = results.set_index(
+    "Dataset"
+)[
+    [
+        "Accuracy",
+        "Precision",
+        "Recall",
+        "F1-score",
+        "ROC-AUC",
+    ]
+]
+
+
+ax = plot_metrics.plot(
+    kind="bar",
+    figsize=(9, 5),
+)
+
+ax.set_title(
+    "Logistic Regression Performance"
+)
+
+ax.set_xlabel("")
+ax.set_ylabel("Score")
+ax.set_ylim(0, 1)
+
+plt.xticks(rotation=0)
+
+plt.legend(
+    loc="lower center",
+    bbox_to_anchor=(0.5, -0.30),
+    ncol=5,
+)
+
+plt.tight_layout()
+
+performance_figure = (
+    FIGURE_DIR
+    / "logistic_regression_performance.png"
+)
+
+plt.savefig(
+    performance_figure,
+    dpi=300,
+    bbox_inches="tight",
+)
+
+plt.show()
+
+
+# ============================================================
+# 20. VALIDATION CONFUSION MATRIX
+# ============================================================
+
+validation_predictions = model.predict(
+    X_validation
+)
+
+validation_cm = confusion_matrix(
+    y_validation,
+    validation_predictions,
+)
+
+validation_display = ConfusionMatrixDisplay(
+    confusion_matrix=validation_cm,
+    display_labels=[
+        "No Purchase",
+        "Purchase",
+    ],
+)
+
+validation_display.plot(
+    values_format="d"
+)
+
+plt.title(
+    "Validation Confusion Matrix"
+)
+
+plt.tight_layout()
+
+validation_cm_file = (
+    FIGURE_DIR
+    / "validation_confusion_matrix.png"
+)
+
+plt.savefig(
+    validation_cm_file,
+    dpi=300,
+    bbox_inches="tight",
+)
+
+plt.show()
+
+
+# ============================================================
+# 21. TEST CONFUSION MATRIX
+# ============================================================
+
+test_predictions = model.predict(
+    X_test
+)
+
+test_cm = confusion_matrix(
+    y_test,
+    test_predictions,
+)
+
+test_display = ConfusionMatrixDisplay(
+    confusion_matrix=test_cm,
+    display_labels=[
+        "No Purchase",
+        "Purchase",
+    ],
+)
+
+test_display.plot(
+    values_format="d"
+)
+
+plt.title(
+    "Test Confusion Matrix"
+)
+
+plt.tight_layout()
+
+test_cm_file = (
+    FIGURE_DIR
+    / "test_confusion_matrix.png"
+)
+
+plt.savefig(
+    test_cm_file,
+    dpi=300,
+    bbox_inches="tight",
+)
+
+plt.show()
+
+
+# ============================================================
+# 22. SAVE SPLIT / BALANCING INFORMATION
+# ============================================================
+
+split_summary = pd.DataFrame(
+    {
+        "Dataset": [
+            "Original cleaned dataset",
+            "Training before balancing",
+            "Training after balancing",
+            "Validation",
+            "Test",
+        ],
+        "Samples": [
+            len(X),
+            len(X_train),
+            len(X_train_balanced),
+            len(X_validation),
+            len(X_test),
+        ],
+        "No Purchase": [
+            int((y == 0).sum()),
+            int((y_train == 0).sum()),
+            int((y_train_balanced == 0).sum()),
+            int((y_validation == 0).sum()),
+            int((y_test == 0).sum()),
+        ],
+        "Purchase": [
+            int((y == 1).sum()),
+            int((y_train == 1).sum()),
+            int((y_train_balanced == 1).sum()),
+            int((y_validation == 1).sum()),
+            int((y_test == 1).sum()),
+        ],
+    }
+)
+
+
+split_summary["Purchase Rate (%)"] = (
+    split_summary["Purchase"]
+    / split_summary["Samples"]
+    * 100
+)
+
+
+split_file = (
+    OUTPUT_DIR
+    / "data_split_summary.csv"
+)
+
+split_summary.to_csv(
+    split_file,
+    index=False,
+)
+
+
+print("\n" + "=" * 70)
+print("FINAL DATA SPLIT SUMMARY")
+print("=" * 70)
+
+print(
+    split_summary.to_string(
+        index=False,
+        float_format=lambda x: f"{x:.2f}",
+    )
+)
+
+
+# ============================================================
+# 23. FINISHED
+# ============================================================
+
+print("\n" + "=" * 70)
+print("STAGE 1 COMPLETE")
+print("=" * 70)
+
+print("\nGenerated files:")
+print(f" - {results_file}")
+print(f" - {split_file}")
+print(f" - {balancing_figure}")
+print(f" - {performance_figure}")
+print(f" - {validation_cm_file}")
+print(f" - {test_cm_file}")
